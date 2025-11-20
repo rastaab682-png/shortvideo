@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const ffmpeg = require('fluent-ffmpeg');
-const { GoogleGenerativeAI } = require('@google/generative-ai'); // ✅ Gemini
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { google } = require('googleapis');
 const sharp = require('sharp');
 const winston = require('winston');
@@ -33,7 +33,6 @@ const logger = winston.createLogger({
 
 class YouTubeShortGenerator {
   constructor() {
-    // ✅ Initialize Gemini instead of OpenAI
     if (!process.env.GEMINI_API_KEY) {
       throw new Error('GEMINI_API_KEY is missing. Get it from https://makersuite.google.com/app/apikey');
     }
@@ -53,7 +52,6 @@ class YouTubeShortGenerator {
   }
 
   validateEnvVars() {
-    // ✅ Updated required variables - removed OPENAI_API_KEY
     const requiredVars = ['GEMINI_API_KEY', 'PEXELS_API_KEY', 'YT_CLIENT_ID', 'YT_CLIENT_SECRET', 'YT_REFRESH_TOKEN'];
     const missingVars = requiredVars.filter(varName => !process.env[varName]);
     
@@ -61,7 +59,6 @@ class YouTubeShortGenerator {
       throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
     }
     
-    // ⚠️ Warn about TTS if ElevenLabs is not configured
     if (!process.env.ELEVENLABS_API_KEY || !process.env.DEFAULT_VOICE_ID) {
       logger.warn('⚠️  ELEVENLABS_API_KEY or DEFAULT_VOICE_ID not found. TTS will fail.');
     }
@@ -73,7 +70,6 @@ class YouTubeShortGenerator {
       
       const prompt = `Generate 20 Persian titles for construction/maintenance tips YouTube Shorts. Each title should be catchy, informative, and under 60 characters. Focus on practical tips, maintenance advice, and safety awareness (not dangerous procedures). Return as JSON array of strings.`;
       
-      // ✅ Use Gemini API
       const model = this.genAI.getGenerativeModel({ 
         model: "gemini-1.5-pro",
         generationConfig: {
@@ -88,7 +84,6 @@ class YouTubeShortGenerator {
       const selectedTitle = titles[Math.floor(Math.random() * titles.length)];
       logger.info(`Selected title: ${selectedTitle}`);
       
-      // Generate script for the selected title
       const scriptPrompt = `Write a 30-45 second YouTube Shorts script in Persian for the title: "${selectedTitle}". The script should be informative, engaging, and focus on practical construction/maintenance tips or safety awareness. Avoid dangerous instructions or structural procedures. Return as JSON with "script" and "key_points" fields.`;
       
       const scriptResult = await model.generateContent(scriptPrompt);
@@ -110,7 +105,6 @@ class YouTubeShortGenerator {
     try {
       logger.info('Generating text-to-speech with ElevenLabs...');
       
-      // ✅ ElevenLabs is now the only TTS option
       if (!process.env.ELEVENLABS_API_KEY || !process.env.DEFAULT_VOICE_ID) {
         throw new Error('ELEVENLABS_API_KEY and DEFAULT_VOICE_ID are required for TTS. Get them from https://elevenlabs.io/ (free tier available)');
       }
@@ -192,11 +186,11 @@ class YouTubeShortGenerator {
       return images;
     } catch (error) {
       logger.error('Error downloading B-roll images:', error);
-      return this.createPlaceholderImages(keyPoints.length, outputDir);
+      return await this.createPlaceholderImages(keyPoints.length, outputDir); // ✅ await اضافه شد
     }
   }
 
-  createPlaceholderImages(count, outputDir) {
+  async createPlaceholderImages(count, outputDir) { // ✅ async اضافه شد
     const placeholderPath = path.join(__dirname, 'placeholder.jpg');
     const images = [];
     
