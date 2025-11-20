@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const ffmpeg = require('fluent-ffmpeg');
-const { OpenAI } = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // ✅ Gemini
 const { google } = require('googleapis');
 const sharp = require('sharp');
 const winston = require('winston');
@@ -33,11 +33,15 @@ const logger = winston.createLogger({
 
 class YouTubeShortGenerator {
   constructor() {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    // ✅ Initialize Gemini instead of OpenAI
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY is missing. Get it from https://makersuite.google.com/app/apikey');
+    }
+    
+    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     this.outputDir = path.join(__dirname, 'output');
     this.ensureOutputDir();
     
-    // Validate required environment variables
     this.validateEnvVars();
   }
 
@@ -49,43 +53,47 @@ class YouTubeShortGenerator {
   }
 
   validateEnvVars() {
-    const requiredVars = ['OPENAI_API_KEY', 'PEXELS_API_KEY', 'YT_CLIENT_ID', 'YT_CLIENT_SECRET', 'YT_REFRESH_TOKEN'];
+    // ✅ Updated required variables - removed OPENAI_API_KEY
+    const requiredVars = ['GEMINI_API_KEY', 'PEXELS_API_KEY', 'YT_CLIENT_ID', 'YT_CLIENT_SECRET', 'YT_REFRESH_TOKEN'];
     const missingVars = requiredVars.filter(varName => !process.env[varName]);
     
     if (missingVars.length > 0) {
       throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
     }
+    
+    // ⚠️ Warn about TTS if ElevenLabs is not configured
+    if (!process.env.ELEVENLABS_API_KEY || !process.env.DEFAULT_VOICE_ID) {
+      logger.warn('⚠️  ELEVENLABS_API_KEY or DEFAULT_VOICE_ID not found. TTS will fail.');
+    }
   }
 
   async generateContent() {
     try {
-      logger.info('Generating construction tip content...');
+      logger.info('Generating construction tip content with Gemini...');
       
       const prompt = `Generate 20 Persian titles for construction/maintenance tips YouTube Shorts. Each title should be catchy, informative, and under 60 characters. Focus on practical tips, maintenance advice, and safety awareness (not dangerous procedures). Return as JSON array of strings.`;
       
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-        max_tokens: 1000
+      // ✅ Use Gemini API
+      const model = this.genAI.getGenerativeModel({ 
+        model: "gemini-1.5-pro",
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
       });
-
-      const titles = JSON.parse(response.choices[0].message.content);
-      const selectedTitle = titles[Math.floor(Math.random() * titles.length)];
       
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const titles = JSON.parse(response.text());
+      
+      const selectedTitle = titles[Math.floor(Math.random() * titles.length)];
       logger.info(`Selected title: ${selectedTitle}`);
       
       // Generate script for the selected title
       const scriptPrompt = `Write a 30-45 second YouTube Shorts script in Persian for the title: "${selectedTitle}". The script should be informative, engaging, and focus on practical construction/maintenance tips or safety awareness. Avoid dangerous instructions or structural procedures. Return as JSON with "script" and "key_points" fields.`;
       
-      const scriptResponse = await this.openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [{ role: "user", content: scriptPrompt }],
-        temperature: 0.7,
-        max_tokens: 800
-      });
-
-      const content = JSON.parse(scriptResponse.choices[0].message.content);
+      const scriptResult = await model.generateContent(scriptPrompt);
+      const scriptResponse = await scriptResult.response;
+      const content = JSON.parse(scriptResponse.text());
       
       return {
         title: selectedTitle,
@@ -100,53 +108,43 @@ class YouTubeShortGenerator {
 
   async generateTTS(text, outputPath) {
     try {
-      logger.info('Generating text-to-speech...');
+      logger.info('Generating text-to-speech with ElevenLabs...');
       
-      // Try ElevenLabs first if available
-      if (process.env.ELEVENLABS_API_KEY && process.env.DEFAULT_VOICE_ID) {
-        try {
-          const response = await axios({
-            method: 'post',
-            url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.DEFAULT_VOICE_ID}`,
-            headers: {
-              'Accept': 'audio/mpeg',
-              'xi-api-key': process.env.ELEVENLABS_API_KEY,
-              'Content-Type': 'application/json'
-            },
-            data: {
-              text: text,
-              model_id: 'eleven_multilingual_v2',
-              voice_settings: {
-                stability: 0.5,
-                similarity_boost: 0.5
-              }
-            },
-            responseType: 'stream'
-          });
-
-          const writer = fs.createWriteStream(outputPath);
-          response.data.pipe(writer);
-          
-          return new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-          });
-        } catch (elevenError) {
-          logger.warn('ElevenLabs TTS failed, falling back to OpenAI TTS');
-        }
+      // ✅ ElevenLabs is now the only TTS option
+      if (!process.env.ELEVENLABS_API_KEY || !process.env.DEFAULT_VOICE_ID) {
+        throw new Error('ELEVENLABS_API_KEY and DEFAULT_VOICE_ID are required for TTS. Get them from https://elevenlabs.io/ (free tier available)');
       }
 
-      // Fallback to OpenAI TTS
-      const mp3Response = await this.openai.audio.speech.create({
-        model: "tts-1",
-        voice: "alloy",
-        input: text
+      const response = await axios({
+        method: 'post',
+        url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.DEFAULT_VOICE_ID}`,
+        headers: {
+          'Accept': 'audio/mpeg',
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        data: {
+          text: text,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5
+          }
+        },
+        responseType: 'stream'
       });
 
-      const buffer = Buffer.from(await mp3Response.arrayBuffer());
-      fs.writeFileSync(outputPath, buffer);
+      const writer = fs.createWriteStream(outputPath);
+      response.data.pipe(writer);
       
-      logger.info('TTS generated successfully');
+      return new Promise((resolve, reject) => {
+        writer.on('finish', () => {
+          logger.info('TTS generated successfully');
+          resolve();
+        });
+        writer.on('error', reject);
+      });
+      
     } catch (error) {
       logger.error('Error generating TTS:', error);
       throw error;
@@ -194,7 +192,6 @@ class YouTubeShortGenerator {
       return images;
     } catch (error) {
       logger.error('Error downloading B-roll images:', error);
-      // Return placeholder images if download fails
       return this.createPlaceholderImages(keyPoints.length, outputDir);
     }
   }
@@ -203,10 +200,21 @@ class YouTubeShortGenerator {
     const placeholderPath = path.join(__dirname, 'placeholder.jpg');
     const images = [];
     
-    for (let i = 0; i < Math.min(count, 5); i++) {
-      const imagePath = path.join(outputDir, `broll_${i}.jpg`);
-      fs.copyFileSync(placeholderPath, imagePath);
-      images.push(imagePath);
+    try {
+      for (let i = 0; i < Math.min(count, 5); i++) {
+        const imagePath = path.join(outputDir, `broll_${i}.jpg`);
+        if (fs.existsSync(placeholderPath)) {
+          fs.copyFileSync(placeholderPath, imagePath);
+        } else {
+          // Create a simple placeholder if file doesn't exist
+          const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#333"/></svg>`;
+          const img = sharp(Buffer.from(svg));
+          await img.jpeg({ quality: 80 }).toFile(imagePath);
+        }
+        images.push(imagePath);
+      }
+    } catch (e) {
+      logger.error('Error creating placeholder images:', e);
     }
     
     logger.warn('Using placeholder images due to download failure');
@@ -218,10 +226,9 @@ class YouTubeShortGenerator {
       logger.info('Creating video with FFmpeg...');
       
       const { script } = content;
-      const videoLength = 35; // 35 seconds target
+      const videoLength = 35;
       const imageDuration = videoLength / images.length;
       
-      // Create input file list for FFmpeg
       const concatListPath = path.join(this.outputDir, 'input_list.txt');
       const concatList = images.map(img => `file '${img}'\nduration ${imageDuration}`).join('\n');
       fs.writeFileSync(concatListPath, concatList);
@@ -268,7 +275,6 @@ class YouTubeShortGenerator {
       const width = 1080;
       const height = 1920;
       
-      // Create a simple thumbnail with text
       const svg = `
         <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
           <rect width="100%" height="100%" fill="#FF6B35"/>
@@ -300,7 +306,7 @@ class YouTubeShortGenerator {
       
       const { script } = content;
       const sentences = script.split(/[.!?]+/).filter(s => s.trim().length > 0);
-      const duration = 35; // 35 seconds
+      const duration = 35;
       const timePerSentence = duration / sentences.length;
       
       let srtContent = '';
@@ -347,7 +353,6 @@ class YouTubeShortGenerator {
 
       const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
       
-      // Upload video
       const videoResponse = await youtube.videos.insert({
         part: 'snippet,status',
         requestBody: {
@@ -355,7 +360,7 @@ class YouTubeShortGenerator {
             title: content.title,
             description: `${content.script}\n\n#ترفندهای_عمرانی #ساختمان #آموزش`,
             tags: ['ترفندهای عمرانی', 'ساختمان', 'آموزش', 'construction', 'tips'],
-            categoryId: '28' // Science & Technology
+            categoryId: '28'
           },
           status: {
             privacyStatus: 'public',
@@ -370,7 +375,6 @@ class YouTubeShortGenerator {
       const videoId = videoResponse.data.id;
       logger.info(`Video uploaded successfully. Video ID: ${videoId}`);
 
-      // Upload thumbnail
       if (thumbnailPath) {
         await youtube.thumbnails.set({
           videoId: videoId,
@@ -396,29 +400,22 @@ class YouTubeShortGenerator {
     try {
       logger.info('Starting YouTube Short generation...');
       
-      // Generate content
       const content = await this.generateContent();
       
-      // Generate TTS
       const audioPath = path.join(this.outputDir, 'audio.mp3');
       await this.generateTTS(content.script, audioPath);
       
-      // Download B-roll images
       const images = await this.downloadBrollImages(content.keyPoints, this.outputDir);
       
-      // Create video
       const videoPath = path.join(this.outputDir, 'output.mp4');
       await this.createVideo(content, audioPath, images, videoPath);
       
-      // Generate thumbnail
       const thumbnailPath = path.join(this.outputDir, 'thumbnail.jpg');
       await this.generateThumbnail(content, thumbnailPath);
       
-      // Generate SRT subtitles
       const srtPath = path.join(this.outputDir, 'subtitles.srt');
       await this.generateSRT(content, audioPath, srtPath);
       
-      // Upload to YouTube
       const uploadResult = await this.uploadToYouTube(videoPath, thumbnailPath, content);
       
       logger.info('YouTube Short generated and uploaded successfully!');
@@ -448,7 +445,6 @@ class YouTubeShortGenerator {
   }
 }
 
-// Main execution
 if (require.main === module) {
   const generator = new YouTubeShortGenerator();
   generator.generate()
