@@ -203,7 +203,7 @@ class YouTubeShortGenerator {
           // Create a simple placeholder if file doesn't exist
           const svg = `<svg width="1080" height="1920" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#333"/></svg>`;
           const img = sharp(Buffer.from(svg));
-          await img.jpeg({ quality: 80 }).toFile(imagePath);
+          await img.jpeg({ quality: 80 }).toFile(imagePath); // ✅ این await حالا کار می‌کند
         }
         images.push(imagePath);
       }
