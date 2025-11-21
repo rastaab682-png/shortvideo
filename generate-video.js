@@ -261,7 +261,7 @@ class YouTubeShortGenerator {
     }
   }
 
-  async generateThumbnail(content, outputPath) {
+  async generateThumbnail(content, images, outputPath) {
     try {
       logger.info('Generating thumbnail...');
       
@@ -269,21 +269,68 @@ class YouTubeShortGenerator {
       const width = 1080;
       const height = 1920;
       
-      const svg = `
-        <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-          <rect width="100%" height="100%" fill="#FF6B35"/>
-          <rect x="50" y="600" width="980" height="800" fill="rgba(0,0,0,0.7)" rx="20"/>
-          <text x="540" y="1000" font-family="Arial, sans-serif" font-size="80" fill="white" text-anchor="middle" dominant-baseline="middle" font-weight="bold">
-            ${title}
+      const backgroundImage = (images && images.length > 0) ? images[0] : path.join(__dirname, 'placeholder.jpg');
+
+      const wrapText = (text, maxWidth, fontSize) => {
+        const words = text.split(' ');
+        if (words.length === 0) return [];
+
+        let lines = [];
+        let currentLine = words[0];
+
+        for (let i = 1; i < words.length; i++) {
+          const word = words[i];
+          // This is a rough approximation. For precise wrapping, you'd need a library
+          // that can measure text width, like 'canvas'.
+          if ((currentLine + ' ' + word).length * (fontSize * 0.5) > maxWidth) {
+            lines.push(currentLine);
+            currentLine = word;
+          } else {
+            currentLine += ' ' + word;
+          }
+        }
+        lines.push(currentLine);
+        return lines;
+      };
+
+      const titleFontSize = 90;
+      const wrappedTitle = wrapText(title, width - 160, titleFontSize);
+      const titleTspans = wrappedTitle.map((line, i) => `<tspan x="50%" dy="${i === 0 ? 0 : '1.2em'}">${line.trim()}</tspan>`).join('');
+
+      const svgText = `
+        <svg width="${width}" height="${height}">
+          <style>
+            .title { font-family: 'Vazir', Arial, sans-serif; font-size: ${titleFontSize}px; fill: white; font-weight: 900; text-anchor: middle; filter: drop-shadow(5px 5px 5px rgba(0,0,0,0.8)); }
+            .subtitle { font-family: 'Vazir', Arial, sans-serif; font-size: 60px; fill: #FFD700; font-weight: bold; text-anchor: middle; filter: drop-shadow(3px 3px 3px rgba(0,0,0,0.8)); }
+          </style>
+          <text x="50%" y="800" class="title">
+            ${titleTspans}
           </text>
-          <text x="540" y="1400" font-family="Arial, sans-serif" font-size="40" fill="#FFD700" text-anchor="middle">
+          <text x="50%" y="1200" class="subtitle">
             ترفندهای عمرانی
           </text>
         </svg>
       `;
 
-      await sharp(Buffer.from(svg))
-        .resize(width, height)
+      const gradientOverlay = Buffer.from(
+        `<svg width="${width}" height="${height}">
+          <defs>
+            <linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style="stop-color:rgba(0,0,0,0.6)" />
+              <stop offset="50%" style="stop-color:rgba(0,0,0,0.1)" />
+              <stop offset="100%" style="stop-color:rgba(0,0,0,0.8)" />
+            </linearGradient>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#grad)"/>
+        </svg>`
+      );
+
+      await sharp(backgroundImage)
+        .resize(width, height, { fit: 'cover', position: 'center' })
+        .composite([
+          { input: gradientOverlay, blend: 'over' },
+          { input: Buffer.from(svgText), top: 0, left: 0 }
+        ])
         .jpeg({ quality: 90 })
         .toFile(outputPath);
 
@@ -405,7 +452,7 @@ class YouTubeShortGenerator {
       await this.createVideo(content, audioPath, images, videoPath);
       
       const thumbnailPath = path.join(this.outputDir, 'thumbnail.jpg');
-      await this.generateThumbnail(content, thumbnailPath);
+      await this.generateThumbnail(content, images, thumbnailPath);
       
       const srtPath = path.join(this.outputDir, 'subtitles.srt');
       await this.generateSRT(content, audioPath, srtPath);
